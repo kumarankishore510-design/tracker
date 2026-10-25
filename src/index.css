@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@theme {
+  --color-navy: #102A43;
+  --color-navy-dark: #091929;
+  --color-navy-light: #1B3F63;
+  --color-orange-brand: #F28C28;
+  --color-orange-dark: #D47112;
+  --color-orange-light: #FF9F43;
+  --color-light-bg: #F5F7FA;
+  --color-dark-text: #172B4D;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-tamil: 'Noto Sans Tamil', sans-serif;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-family: var(--font-sans);
+  }
+  
+  body {
+    background-color: #F5F7FA;
+    color: #172B4D;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #E2E8F0;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+/* Print styles for quotations and receipts */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+}
