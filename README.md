@@ -122,10 +122,13 @@ bun run server/server.ts
 
 ## 🔐 Administrator Setup & Login
 
-- **Admin Login Route:** [`/admin/login`](http://localhost:5173/admin/login)
-- **Default Username:** `admin`
-- **Default Password:** `admin123`
-*(Can be customized via the `ADMIN_PASSWORD` environment variable in `.env` or in the database).*
+- Admin login route: /admin/login.
+- Provision the initial administrator by setting ADMIN_PASSWORD in Replit Secrets or your deployment's secret manager before starting the server. It must contain at least 12 characters.
+- ADMIN_USERNAME is optional and defaults to admin.
+- No shared default password or offline demo login is provided. If ADMIN_PASSWORD is not configured on a fresh database, no administrator account is created.
+- For databases created by older versions, configure ADMIN_PASSWORD before deploying this release. The legacy plaintext admin password is replaced with a scrypt hash at startup; already-hashed accounts are not reset.
+- Server sessions expire after 12 hours and are revoked on logout. Every /api/admin route requires a valid bearer session.
+- Never put a real password in .env.example or commit it to source control.
 
 ---
 

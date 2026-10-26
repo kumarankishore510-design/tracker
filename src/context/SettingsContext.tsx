@@ -1,10 +1,11 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { CompanySettings } from '../types';
 import { defaultCompanySettings } from '../data/defaultSettings';
+import { adminFetch, requireAdminSuccess } from '../services/api';
 
 interface SettingsContextType {
   settings: CompanySettings;
-  updateSettings: (newSettings: Partial<CompanySettings>) => void;
+  updateSettings: (newSettings: Partial<CompanySettings>) => Promise<void>;
   isLoading: boolean;
 }
 
@@ -46,21 +47,19 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     fetchSettings();
   }, []);
 
-  const updateSettings = async (newSettings: Partial<CompanySettings>) => {
+  const updateSettings = async (newSettings: Partial<CompanySettings>): Promise<void> => {
     const updated = { ...settings, ...newSettings };
-    setSettings(updated);
-    localStorage.setItem('sks_settings', JSON.stringify(updated));
-
-    try {
-      await fetch('/api/admin/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      });
-    } catch {
-      // Local fallback already saved
-    }
+    const res = await adminFetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated),
+    });
+    requireAdminSuccess(res);
+    const saved = await res.json();
+    setSettings(saved);
+    localStorage.setItem('sks_settings', JSON.stringify(saved));
   };
+
 
   return (
     <SettingsContext.Provider value={{ settings, updateSettings, isLoading }}>

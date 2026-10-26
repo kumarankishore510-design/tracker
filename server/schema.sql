@@ -140,6 +140,13 @@ CREATE TABLE IF NOT EXISTS admin_users (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash TEXT PRIMARY KEY,
+  admin_user_id TEXT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+  created_at BIGINT NOT NULL,
+  expires_at BIGINT NOT NULL
+);
+
 -- Indexes for performance & quick lookups
 CREATE INDEX IF NOT EXISTS idx_bookings_dates ON bookings (departure_date, return_date);
 CREATE INDEX IF NOT EXISTS idx_bookings_vehicle ON bookings (vehicle_id);
@@ -148,3 +155,4 @@ CREATE INDEX IF NOT EXISTS idx_bookings_ref ON bookings (booking_ref);
 CREATE INDEX IF NOT EXISTS idx_destinations_slug ON destinations (slug);
 CREATE INDEX IF NOT EXISTS idx_destinations_category ON destinations (category);
 CREATE INDEX IF NOT EXISTS idx_packages_slug ON tour_packages (slug);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_expiry ON admin_sessions (expires_at);

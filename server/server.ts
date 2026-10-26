@@ -1,33 +1,25 @@
 import { initDatabase, db } from './db';
 import { areDateRangesOverlapping } from '../src/utils/dateUtils';
 import { calculateQuotation } from '../src/utils/pricingCalculator';
+import {
+  createAdminSessionToken,
+  findAdminSession,
+  hashAdminSessionToken,
+  verifyAdminPassword,
+  type AdminSession,
+} from './auth';
 
 // Initialize the database tables and seed data
 initDatabase();
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
+const ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60;
 
-function jsonResponse(data: any, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    },
-  });
-}
-
-function corsOptionsResponse() {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    },
-  });
+function authenticateAdmin(req: Request): AdminSession | null {
+  const authorization = req.headers.get('authorization') || '';
+  const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{43})$/);
+  if (!match) return null;
+  return findAdminSession(db, match[1]);
 }
 
 const server = Bun.serve({
@@ -41,6 +33,13 @@ const server = Bun.serve({
     }
 
     try {
+      const isProtectedAdminRoute =
+        url.pathname.startsWith('/api/admin/') && url.pathname !== '/api/admin/login';
+      const adminSession = isProtectedAdminRoute ? authenticateAdmin(req) : null;
+      if (isProtectedAdminRoute && !adminSession) {
+        return jsonResponse({ error: 'Authentication required.' }, 401);
+      }
+
       // 1. GET /api/vehicles
       if (url.pathname === '/api/vehicles' && method === 'GET') {
         const rows = db.query('SELECT * FROM vehicles ORDER BY capacity ASC').all() as any[];
@@ -350,29 +349,47 @@ const server = Bun.serve({
         });
       }
 
-      // 10. POST /api/admin/login
+      // POST /api/admin/login
       if (url.pathname === '/api/admin/login' && method === 'POST') {
-        const { username, password } = await req.json();
-        const user = db.query('SELECT * FROM admin_users WHERE username = ?').get(username) as any;
-
-        // Support default admin or environment configured admin
-        const envPassword = process.env.ADMIN_PASSWORD || 'admin123';
-        if (
-          user &&
-          (user.password_hash === password || (username === 'admin' && password === envPassword))
-        ) {
-          const token = 'sks_token_' + Buffer.from(`${username}:${Date.now()}`).toString('base64');
-          return jsonResponse({
-            token,
-            user: {
-              username: user.username,
-              role: user.role,
-              name: user.name,
-            },
-          });
+        const credentials = await req.json();
+        const username = typeof credentials?.username === 'string' ? credentials.username.trim() : '';
+        const password = typeof credentials?.password === 'string' ? credentials.password : '';
+        if (!username || !password || password.length > 1024) {
+          return jsonResponse({ error: 'Invalid username or password.' }, 401);
         }
 
-        return jsonResponse({ error: 'Invalid username or password.' }, 401);
+        const user = db.query('SELECT * FROM admin_users WHERE username = ?').get(username) as any;
+        if (!user || !verifyAdminPassword(password, user.password_hash)) {
+          return jsonResponse({ error: 'Invalid username or password.' }, 401);
+        }
+
+        const now = Math.floor(Date.now() / 1000);
+        const expiresAt = now + ADMIN_SESSION_TTL_SECONDS;
+        const token = createAdminSessionToken();
+        const tokenHash = hashAdminSessionToken(token);
+        db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').run(now);
+        db.prepare(
+          'INSERT INTO admin_sessions (token_hash, admin_user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
+        ).run(tokenHash, user.id, now, expiresAt);
+
+        return jsonResponse({
+          token,
+          expiresAt: expiresAt * 1000,
+          user: { username: user.username, role: user.role, name: user.name },
+        });
+      }
+
+      // Validate a saved administrator session when the app starts.
+      if (url.pathname === '/api/admin/session' && method === 'GET') {
+        if (!adminSession) return jsonResponse({ error: 'Authentication required.' }, 401);
+        return jsonResponse({ user: adminSession.user, expiresAt: adminSession.expiresAt * 1000 });
+      }
+
+      // Revoke the current administrator session on logout.
+      if (url.pathname === '/api/admin/logout' && method === 'POST') {
+        if (!adminSession) return jsonResponse({ error: 'Authentication required.' }, 401);
+        db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').run(adminSession.tokenHash);
+        return jsonResponse({ success: true });
       }
 
       // 11. GET /api/admin/bookings

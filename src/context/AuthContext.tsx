@@ -16,6 +16,7 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const SESSION_EXPIRED_EVENT = 'sks:admin-session-expired';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -23,20 +24,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check saved session
-    const savedToken = localStorage.getItem('sks_admin_token');
-    const savedUser = localStorage.getItem('sks_admin_user');
-
-    if (savedToken && savedUser) {
-      try {
-        setToken(savedToken);
-        setUser(JSON.parse(savedUser));
-      } catch {
-        localStorage.removeItem('sks_admin_token');
-        localStorage.removeItem('sks_admin_user');
+    let active = true;
+    const clearSession = () => {
+      localStorage.removeItem('sks_admin_token');
+      localStorage.removeItem('sks_admin_user');
+      if (active) {
+        setToken(null);
+        setUser(null);
       }
-    }
-    setIsLoading(false);
+    };
+    const onSessionExpired = () => clearSession();
+    window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+
+    const restoreSession = async () => {
+      const savedToken = localStorage.getItem('sks_admin_token');
+      if (!savedToken) {
+        localStorage.removeItem('sks_admin_user');
+        if (active) setIsLoading(false);
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/admin/session', {
+          headers: { Authorization: 'Bearer ' + savedToken },
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error('Administrator session is invalid.');
+        const data = await response.json();
+        if (!data?.user) throw new Error('Administrator session is invalid.');
+        if (active) {
+          setToken(savedToken);
+          setUser(data.user);
+          localStorage.setItem('sks_admin_user', JSON.stringify(data.user));
+        }
+      } catch {
+        clearSession();
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+
+    void restoreSession();
+    return () => {
+      active = false;
+      window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+    };
   }, []);
 
   const login = (newToken: string, newUser: AuthUser) => {
@@ -47,10 +79,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    const tokenToRevoke = token;
     setToken(null);
     setUser(null);
     localStorage.removeItem('sks_admin_token');
     localStorage.removeItem('sks_admin_user');
+
+    if (tokenToRevoke) {
+      void fetch('/api/admin/logout', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + tokenToRevoke },
+      }).catch(() => {});
+    }
   };
 
   return (

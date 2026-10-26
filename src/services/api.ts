@@ -133,6 +133,35 @@ function setLocalItem<T>(key: string, val: T): void {
   }
 }
 
+function clearStoredAdminSession(): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem('sks_admin_token');
+    localStorage.removeItem('sks_admin_user');
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sks:admin-session-expired'));
+  }
+}
+
+export async function adminFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('sks_admin_token') : null;
+  if (token) headers.set('Authorization', 'Bearer ' + token);
+
+  const response = await fetch(input, { ...init, headers, cache: 'no-store' });
+  if (response.status === 401) clearStoredAdminSession();
+  return response;
+}
+
+export function requireAdminSuccess(response: Response): void {
+  if (!response.ok) {
+    const message = response.status === 401
+      ? 'Administrator session expired. Please sign in again.'
+      : 'Administrator request failed (' + response.status + ').';
+    throw new Error(message);
+  }
+}
+
 export const api = {
   // VEHICLES
   async getVehicles(): Promise<Vehicle[]> {
@@ -256,18 +285,15 @@ export const api = {
   },
 
   async updatePricingRule(rule: PricingRule): Promise<PricingRule> {
-    setLocalItem(STORAGE_KEYS.PRICING, rule);
-    try {
-      const res = await fetch('/api/admin/pricing', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rule),
-      });
-      if (res.ok) return await res.json();
-    } catch {
-      // Saved locally
-    }
-    return rule;
+    const res = await adminFetch('/api/admin/pricing', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rule),
+    });
+    requireAdminSuccess(res);
+    const saved = await res.json();
+    setLocalItem(STORAGE_KEYS.PRICING, saved);
+    return saved;
   },
 
   // CALCULATE PRICING
@@ -287,30 +313,18 @@ export const api = {
 
   // BOOKINGS & ENQUIRIES
   async getBookings(): Promise<Booking[]> {
-    try {
-      const res = await fetch('/api/admin/bookings');
-      if (res.ok) {
-        const data = await res.json();
-        setLocalItem(STORAGE_KEYS.BOOKINGS, data);
-        return data;
-      }
-    } catch {
-      // fallback
-    }
-    return getLocalItem<Booking[]>(STORAGE_KEYS.BOOKINGS, initialSampleBookings);
+    const res = await adminFetch('/api/admin/bookings');
+    requireAdminSuccess(res);
+    const data = await res.json();
+    setLocalItem(STORAGE_KEYS.BOOKINGS, data);
+    return data;
   },
 
   async getBookingByRef(ref: string): Promise<Booking | undefined> {
-    try {
-      const res = await fetch(`/api/bookings/track/${encodeURIComponent(ref.trim())}`);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // fallback
-    }
-    const bookings = await this.getBookings();
-    return bookings.find((b) => b.bookingRef.toLowerCase() === ref.trim().toLowerCase());
+    const res = await fetch('/api/bookings/track/' + encodeURIComponent(ref.trim()), { cache: 'no-store' });
+    if (res.status === 404) return undefined;
+    if (!res.ok) throw new Error('Booking lookup failed (' + res.status + ').');
+    return await res.json();
   },
 
   async createBooking(booking: Omit<Booking, 'id' | 'createdAt' | 'updatedAt'>): Promise<Booking> {
@@ -361,7 +375,7 @@ export const api = {
   },
 
   async updateBooking(id: string, updates: Partial<Booking>): Promise<Booking> {
-    // Check if status is transitioning to Confirmed, verify no collision
+    // Check if status is transitioning to Confirmed, verify no collision.
     if (updates.status === 'Confirmed') {
       const current = await this.getBookings();
       const existing = current.find((b) => b.id === id);
@@ -369,66 +383,41 @@ export const api = {
         const vehicleId = updates.vehicleId || existing.vehicleId;
         const departureDate = updates.departureDate || existing.departureDate;
         const returnDate = updates.returnDate || existing.returnDate;
-
         const check = await this.checkVehicleAvailability(vehicleId, departureDate, returnDate, id);
         if (!check.isAvailable) {
-          throw new Error(`Cannot confirm booking: ${check.message}`);
+          throw new Error('Cannot confirm booking: ' + check.message);
         }
       }
     }
 
-    try {
-      const res = await fetch(`/api/admin/bookings/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const bookings = await this.getBookings();
-        setLocalItem(
-          STORAGE_KEYS.BOOKINGS,
-          bookings.map((b) => (b.id === id ? data : b))
-        );
-        return data;
-      }
-    } catch {
-      // fallback
-    }
-
+    const res = await adminFetch('/api/admin/bookings/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    requireAdminSuccess(res);
+    await res.json();
     const bookings = await this.getBookings();
-    const target = bookings.find((b) => b.id === id);
-    if (!target) throw new Error('Booking not found');
-
-    const updated: Booking = {
-      ...target,
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-
-    setLocalItem(
-      STORAGE_KEYS.BOOKINGS,
-      bookings.map((b) => (b.id === id ? updated : b))
-    );
+    const updated = bookings.find((b) => b.id === id);
+    if (!updated) throw new Error('Booking not found after update.');
+    setLocalItem(STORAGE_KEYS.BOOKINGS, bookings);
     return updated;
   },
 
   async updateVehicle(vehicle: Vehicle): Promise<Vehicle> {
+    const res = await adminFetch('/api/admin/vehicles/' + encodeURIComponent(vehicle.id), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vehicle),
+    });
+    requireAdminSuccess(res);
+    const saved = await res.json();
+    const vehicles = await this.getVehicles();
     setLocalItem(
       STORAGE_KEYS.VEHICLES,
-      initialVehicles.map((v) => (v.id === vehicle.id ? vehicle : v))
+      vehicles.map((item) => (item.id === vehicle.id ? saved : item))
     );
-    try {
-      const res = await fetch(`/api/admin/vehicles/${vehicle.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(vehicle),
-      });
-      if (res.ok) return await res.json();
-    } catch {
-      // saved locally
-    }
-    return vehicle;
+    return saved;
   },
 
   // Export Bookings CSV
