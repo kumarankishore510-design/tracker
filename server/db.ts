@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite';
+import { hashAdminPassword, isAdminPasswordHash } from './auth';
 import { initialVehicles } from '../src/data/vehicles';
 import { initialDestinations } from '../src/data/destinations';
 import { initialTourPackages } from '../src/data/packages';
@@ -154,6 +155,15 @@ export function initDatabase() {
       role TEXT DEFAULT 'admin',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      token_hash TEXT PRIMARY KEY,
+      admin_user_id TEXT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_admin_sessions_expiry ON admin_sessions (expires_at);
   `);
 
   // Seed default settings if not exists
@@ -430,20 +440,44 @@ export function initDatabase() {
     );
   }
 
-  // Seed default admin user (username: admin, password: password123 or configurable)
+  // Create or migrate the initial administrator only from deployment configuration.
   const adminCount = db.query('SELECT COUNT(*) as count FROM admin_users').get() as { count: number };
+  const bootstrapUsername = process.env.ADMIN_USERNAME?.trim() || 'admin';
+  const bootstrapPassword = process.env.ADMIN_PASSWORD;
+  const hasValidBootstrapPassword = typeof bootstrapPassword === 'string' && bootstrapPassword.length >= 12;
+
   if (adminCount.count === 0) {
-    const insertAdmin = db.prepare(`
-      INSERT INTO admin_users (id, username, password_hash, name, role)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-    // Simple SHA-256 or bcrypt hash simulation for demo, customizable
-    insertAdmin.run(
-      'admin-1',
-      'admin',
-      'admin123', // Initial credential
-      'SKS Operations Lead',
-      'superadmin'
-    );
+    if (hasValidBootstrapPassword) {
+      const insertAdmin = db.prepare(
+        'INSERT INTO admin_users (id, username, password_hash, name, role) VALUES (?, ?, ?, ?, ?)'
+      );
+      insertAdmin.run(
+        'admin-1',
+        bootstrapUsername,
+        hashAdminPassword(bootstrapPassword),
+        'SKS Operations Lead',
+        'superadmin'
+      );
+    } else {
+      console.warn('No administrator created. Configure ADMIN_PASSWORD with at least 12 characters.');
+    }
+  } else {
+    // Prior versions seeded a plaintext default. Disable it unless an operator supplies a new secret.
+    const legacyAdmin = db
+      .query('SELECT id, password_hash FROM admin_users WHERE username = ?')
+      .get('admin') as { id: string; password_hash: string } | null;
+
+    if (legacyAdmin && !isAdminPasswordHash(legacyAdmin.password_hash)) {
+      if (hasValidBootstrapPassword) {
+        db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?').run(
+          hashAdminPassword(bootstrapPassword),
+          legacyAdmin.id
+        );
+        db.prepare('DELETE FROM admin_sessions WHERE admin_user_id = ?').run(legacyAdmin.id);
+        console.warn('Migrated the legacy administrator password using ADMIN_PASSWORD.');
+      } else {
+        console.warn('Legacy administrator login is disabled. Configure ADMIN_PASSWORD with at least 12 characters to migrate it.');
+      }
+    }
   }
 }

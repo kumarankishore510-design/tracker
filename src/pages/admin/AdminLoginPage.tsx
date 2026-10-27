@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ShieldCheck, Lock, User, ArrowRight, AlertCircle, Info, Bus } from 'lucide-react';
+import { Lock, User, ArrowRight, AlertCircle, Info, Bus } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { SEO } from '../../components/common/SEO';
 
@@ -9,7 +9,7 @@ export const AdminLoginPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -28,38 +28,20 @@ export const AdminLoginPage: React.FC = () => {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
         body: JSON.stringify({ username: username.trim(), password }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        login(data.token, data.user);
-        navigate('/admin/dashboard');
-      } else {
-        // Fallback for offline demo mode
-        if (username === 'admin' && (password === 'admin123' || password === 'admin')) {
-          login('demo_token_' + Date.now(), {
-            username: 'admin',
-            role: 'superadmin',
-            name: 'SKS Operations Lead',
-          });
-          navigate('/admin/dashboard');
-        } else {
-          setErrorMsg('Invalid username or password.');
-        }
+      if (!res.ok) {
+        setErrorMsg('Invalid username or password.');
+        return;
       }
+
+      const data = await res.json();
+      login(data.token, data.user);
+      navigate('/admin/dashboard');
     } catch {
-      // Local fallback
-      if (username === 'admin' && (password === 'admin123' || password === 'admin')) {
-        login('demo_token_' + Date.now(), {
-          username: 'admin',
-          role: 'superadmin',
-          name: 'SKS Operations Lead',
-        });
-        navigate('/admin/dashboard');
-      } else {
-        setErrorMsg('Invalid login credentials.');
-      }
+      setErrorMsg('Unable to reach the server. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -140,16 +122,13 @@ export const AdminLoginPage: React.FC = () => {
             </button>
           </form>
 
-          {/* Documented Initial Setup Notice */}
           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs text-slate-600 space-y-1.5">
             <div className="flex items-center space-x-1.5 font-bold text-[#102A43]">
               <Info className="w-3.5 h-3.5 text-[#F28C28]" />
-              <span>Initial Administrator Credentials:</span>
+              <span>Administrator setup</span>
             </div>
             <p className="text-[11px] leading-relaxed">
-              Default operational username: <code className="bg-slate-200 px-1 py-0.5 rounded font-mono font-bold text-[#102A43]">admin</code>
-              <br />
-              Default password: <code className="bg-slate-200 px-1 py-0.5 rounded font-mono font-bold text-[#102A43]">admin123</code> (configurable via <code className="font-mono">ADMIN_PASSWORD</code> environment variable or backend database).
+              The first administrator account must be provisioned through the server's deployment secrets. No shared default or offline login is available.
             </p>
           </div>
 
